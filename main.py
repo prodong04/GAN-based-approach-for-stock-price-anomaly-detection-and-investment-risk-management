@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 import pandas as pd
 from tqdm import tqdm
 from sklearn.preprocessing import MinMaxScaler
@@ -47,19 +48,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 generator = Generator(seq_len, noise_dim).to(device)
 discriminator = Discriminator(seq_len).to(device)
 
-try:
-    generator.load_state_dict(torch.load('best_g.pth'))
-    discriminator.load_state_dict(torch.load('best_d.pth'))
-    print('Model loaded')
-except FileNotFoundError:
-    print('Starting fresh training.')
+# try:
+#     generator.load_state_dict(torch.load('best_g.pth'))
+#     discriminator.load_state_dict(torch.load('best_d.pth'))
+#     print('Model loaded')
+# except FileNotFoundError:
+#     print('Starting fresh training.')
 
 # 손실 함수 및 최적화 기법 설정
 criterion = nn.BCEWithLogitsLoss()
 g_optimizer = torch.optim.Adam(generator.parameters(), lr=1.5e-4)
 d_optimizer = torch.optim.Adam(discriminator.parameters(), lr=1e-5)
 
-num_epochs = 1
+num_epochs = 20
 
 best_d_loss = float('inf')
 best_g_loss = float('inf')
@@ -81,17 +82,17 @@ for epoch in tqdm(range(num_epochs)):
 
         # 진짜 데이터에 대한 손실 계산
         real_outputs = discriminator(real_data)
-        d_loss_real = criterion(real_outputs, real_labels)
+        d_loss_real = F.binary_cross_entropy_with_logits(real_outputs, real_labels)
 
         # 가짜 데이터 생성 및 손실 계산
         noise = torch.randn(batch_size, noise_dim).to(device)
         noise = noise.unsqueeze(1)  # (batch_size, 1, noise_dim)
         fake_data = generator(noise)
         fake_outputs = discriminator(fake_data.detach())
-        d_loss_fake = criterion(fake_outputs, fake_labels)
+        d_loss_fake = F.binary_cross_entropy_with_logits(fake_outputs, fake_labels)
 
         # Discriminator의 총 손실 및 역전파
-        d_loss = (1 - lamda) * d_loss_real + lamda * d_loss_fake
+        d_loss = d_loss_real + d_loss_fake
         d_loss.backward()
         d_optimizer.step()
 
@@ -101,7 +102,7 @@ for epoch in tqdm(range(num_epochs)):
         noise = noise.unsqueeze(1)
         fake_data = generator(noise)
         outputs = discriminator(fake_data)
-        g_loss = criterion(outputs, real_labels)  # Generator는 판별자를 속이려고 함
+        g_loss = F.binary_cross_entropy_with_logits(outputs, real_labels)  # Generator는 판별자를 속이려고 함
 
         g_loss.backward()
         g_optimizer.step()
@@ -117,7 +118,7 @@ for epoch in tqdm(range(num_epochs)):
         print('Best model saved!')
 
 # 학습 후 anomaly score 계산을 위한 함수 정의
-def compute_anomaly_score(generator, discriminator, real_data, noise_dim, lamda=0.9, n_iter=3):
+def compute_anomaly_score(generator, discriminator, real_data, noise_dim, lamda=0.9, n_iter=50):
     generator.eval()
     discriminator.eval()
     
@@ -159,7 +160,11 @@ test_dataset = SequenceDataset(test_data, seq_len)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 anomaly_lst = []
 for test_sample in tqdm(test_loader):
-    anomaly_score = compute_anomaly_score(generator, discriminator, test_sample.squeeze(), noise_dim, lamda=0.9)
+    anomaly_score_lst = []
+    for _ in range(3):
+        anomaly_score = compute_anomaly_score(generator, discriminator, test_sample.squeeze(), noise_dim, lamda=0.9)
+        anomaly_score_lst.append(anomaly_score)
+    anomaly_score = min(anomaly_score_lst)
     print(f'Anomaly Score: {anomaly_score}')
     anomaly_lst.append(anomaly_score)
     
